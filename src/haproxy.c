@@ -63,6 +63,7 @@
 #include <common/time.h>
 #include <common/uri_auth.h>
 #include <common/version.h>
+#include <common/debug.h>
 
 #include <types/capture.h>
 #include <types/global.h>
@@ -964,6 +965,7 @@ void run_poll_loop()
 
 	tv_update_date(0,1);
 	while (1) {
+        DPRINTF(stderr, "** main while **\n");
 		/* check if we caught some signals and process them */
 		signal_process_queue();
 
@@ -1244,14 +1246,14 @@ int main(int argc, char **argv)
 		 * it would have already be done, and 0-2 would have been affected to listening
 		 * sockets
 		 */
-		if (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE)) {
-			/* detach from the tty */
-            Warning("TO BE QUIET?!\n");
-			//fclose(stdin); fclose(stdout); fclose(stderr);
-			//global.mode &= ~MODE_VERBOSE;
-			//global.mode |= MODE_QUIET; /* ensure that we won't say anything from now */
-            Warning("OF COURSE NOT!!\n");
-		}
+                if (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE)) {
+                    /* detach from the tty */
+                    Warning("TO BE QUIET?!\n");
+                    fclose(stdin); fclose(stdout); fclose(stderr);
+                    global.mode &= ~MODE_VERBOSE;
+                    global.mode |= MODE_QUIET; /* ensure that we won't say anything from now */
+                    Warning("OF COURSE NOT!!\n");
+                }
 		pid = getpid(); /* update child's pid */
 		setsid();
 		fork_poller();

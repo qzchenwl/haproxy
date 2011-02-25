@@ -7576,12 +7576,18 @@ acl_fetch_hdr(struct proxy *px, struct session *l4, void *l7, char *sol,
 		/* search for header from the beginning */
 		ctx->idx = 0;
 
-	if (http_find_header2(expr->arg.str, expr->arg_len, sol, idx, ctx)) {
+        char *tmp_str = strndup(expr->arg.str, expr->arg_len);
+        Warning("acl_fetch_hdr: acl_expr is %s\n", tmp_str);
+        free(tmp_str);
+        if (http_find_header2(expr->arg.str, expr->arg_len, sol, idx, ctx)) {
 		test->flags |= ACL_TEST_F_FETCH_MORE;
 		test->flags |= ACL_TEST_F_VOL_HDR;
-		test->len = ctx->vlen;
-		test->ptr = (char *)ctx->line + ctx->val;
-		return 1;
+                test->len = ctx->vlen;
+                test->ptr = (char *)ctx->line + ctx->val;
+                tmp_str = strndup(test->ptr, test->len);
+                Warning("acl_fetch_hdr: test is %s\n", tmp_str);
+                free(tmp_str);
+                return 1;
 	}
 
 	test->flags &= ~ACL_TEST_F_FETCH_MORE;
