@@ -18,7 +18,6 @@
 
 #include <types/capture.h>
 #include <types/global.h>
-#include <types/hashtbl.h>
 
 #include <proto/acl.h>
 #include <proto/backend.h>
@@ -560,121 +559,93 @@ static void sess_prepare_conn_req(struct session *s, struct stream_interface *si
  */
 int process_switching_rules(struct session *s, struct buffer *req, int an_bit)
 {
-    struct persist_rule *prst_rule;
+	struct persist_rule *prst_rule;
 
-    Warning("invoke process_switching_rules( s = %p, req = %p, an_bit = %d)\n", s, req, an_bit);
+	req->analysers &= ~an_bit;
+	req->analyse_exp = TICK_ETERNITY;
 
-    req->analysers &= ~an_bit;
-    req->analyse_exp = TICK_ETERNITY;
+	DPRINTF(stderr,"[%u] %s: session=%p b=%p, exp(r,w)=%u,%u bf=%08x bl=%d analysers=%02x\n",
+		now_ms, __FUNCTION__,
+		s,
+		req,
+		req->rex, req->wex,
+		req->flags,
+		req->l,
+		req->analysers);
 
-    DPRINTF(stderr,"[%u] %s: session=%p b=%p, exp(r,w)=%u,%u bf=%08x bl=%d analysers=%02x\n",
-            now_ms, __FUNCTION__,
-            s,
-            req,
-            req->rex, req->wex,
-            req->flags,
-            req->l,
-            req->analysers);
+	/* now check whether we have some switching rules for this request */
+	if (!(s->flags & SN_BE_ASSIGNED)) {
+		struct switching_rule *rule;
 
-    /* now check whether we have some switching rules for this request */
-    if (!(s->flags & SN_BE_ASSIGNED)) {
-        struct switching_rule *rule;
+		list_for_each_entry(rule, &s->fe->switching_rules, list) {
+			int ret;
 
-        // TODO cwl get hdr(host)
-        struct hdr_ctx ctx;
-        memset( &ctx, 0, sizeof(ctx));
-        if (http_find_header("host", s->txn.req.sol, &s->txn.hdr_idx, &ctx)) {
-            char *tmp_str = strndup(ctx.line+ctx.val, ctx.vlen);
-            Warning("process_switching_rules: get hdr(host) = %s\n", tmp_str);
-            struct hashnode_s *node;
-            union be be_el;
-            be_el.backend = hashtbl_get(s->fe->switching_hashtbl, tmp_str);
-            free(tmp_str);
-            if(be_el.backend) {
-                Warning("process_switching_rules: get backend(%p)\n", be_el.backend);
-                if (!session_set_backend(s, be_el.backend))
-                    goto sw_failed;
-                goto ignore_switching_rules_cwl;
-            }
-        }
-        else {
-            Warning("get host name failed\n");
-        }
-        // TODO end cwl get hdr(host)
+			ret = acl_exec_cond(rule->cond, s->fe, s, &s->txn, ACL_DIR_REQ);
+			ret = acl_pass(ret);
+			if (rule->cond->pol == ACL_COND_UNLESS)
+				ret = !ret;
 
+			if (ret) {
+				if (!session_set_backend(s, rule->be.backend))
+					goto sw_failed;
+				break;
+			}
+		}
 
+		/* To ensure correct connection accounting on the backend, we
+		 * have to assign one if it was not set (eg: a listen). This
+		 * measure also takes care of correctly setting the default
+		 * backend if any.
+		 */
+		if (!(s->flags & SN_BE_ASSIGNED))
+			if (!session_set_backend(s, s->fe->defbe.be ? s->fe->defbe.be : s->be))
+				goto sw_failed;
+	}
 
-        list_for_each_entry(rule, &s->fe->switching_rules, list) {
-            int ret;
+	/* we don't want to run the HTTP filters again if the backend has not changed */
+	if (s->fe == s->be)
+		s->req->analysers &= ~AN_REQ_HTTP_PROCESS_BE;
 
-            ret = acl_exec_cond(rule->cond, s->fe, s, &s->txn, ACL_DIR_REQ);
-            ret = acl_pass(ret);
-            if (rule->cond->pol == ACL_COND_UNLESS)
-                ret = !ret;
+	/* as soon as we know the backend, we must check if we have a matching forced or ignored
+	 * persistence rule, and report that in the session.
+	 */
+	list_for_each_entry(prst_rule, &s->be->persist_rules, list) {
+		int ret = 1;
 
-            if (ret) {
-                if (!session_set_backend(s, rule->be.backend))
-                    goto sw_failed;
-                break;
-            }
-        }
+		if (prst_rule->cond) {
+	                ret = acl_exec_cond(prst_rule->cond, s->be, s, &s->txn, ACL_DIR_REQ);
+			ret = acl_pass(ret);
+			if (prst_rule->cond->pol == ACL_COND_UNLESS)
+				ret = !ret;
+		}
 
-ignore_switching_rules_cwl:
+		if (ret) {
+			/* no rule, or the rule matches */
+			if (prst_rule->type == PERSIST_TYPE_FORCE) {
+				s->flags |= SN_FORCE_PRST;
+			} else {
+				s->flags |= SN_IGNORE_PRST;
+			}
+			break;
+		}
+	}
 
-        /* To ensure correct connection accounting on the backend, we
-         * have to assign one if it was not set (eg: a listen). This
-         * measure also takes care of correctly setting the default
-         * backend if any.
-         */
-        if (!(s->flags & SN_BE_ASSIGNED))
-            if (!session_set_backend(s, s->fe->defbe.be ? s->fe->defbe.be : s->be))
-                goto sw_failed;
-    }
+	return 1;
 
-    /* we don't want to run the HTTP filters again if the backend has not changed */
-    if (s->fe == s->be)
-        s->req->analysers &= ~AN_REQ_HTTP_PROCESS_BE;
+ sw_failed:
+	/* immediately abort this request in case of allocation failure */
+	buffer_abort(s->req);
+	buffer_abort(s->rep);
 
-    /* as soon as we know the backend, we must check if we have a matching forced or ignored
-     * persistence rule, and report that in the session.
-     */
-    list_for_each_entry(prst_rule, &s->be->persist_rules, list) {
-        int ret = 1;
+	if (!(s->flags & SN_ERR_MASK))
+		s->flags |= SN_ERR_RESOURCE;
+	if (!(s->flags & SN_FINST_MASK))
+		s->flags |= SN_FINST_R;
 
-        if (prst_rule->cond) {
-            ret = acl_exec_cond(prst_rule->cond, s->be, s, &s->txn, ACL_DIR_REQ);
-            ret = acl_pass(ret);
-            if (prst_rule->cond->pol == ACL_COND_UNLESS)
-                ret = !ret;
-        }
-
-        if (ret) {
-            /* no rule, or the rule matches */
-            if (prst_rule->type == PERSIST_TYPE_FORCE) {
-                s->flags |= SN_FORCE_PRST;
-            } else {
-                s->flags |= SN_IGNORE_PRST;
-            }
-            break;
-        }
-    }
-
-    return 1;
-
-sw_failed:
-    /* immediately abort this request in case of allocation failure */
-    buffer_abort(s->req);
-    buffer_abort(s->rep);
-
-    if (!(s->flags & SN_ERR_MASK))
-        s->flags |= SN_ERR_RESOURCE;
-    if (!(s->flags & SN_FINST_MASK))
-        s->flags |= SN_FINST_R;
-
-    s->txn.status = 500;
-    s->req->analysers = 0;
-    s->req->analyse_exp = TICK_ETERNITY;
-    return 0;
+	s->txn.status = 500;
+	s->req->analysers = 0;
+	s->req->analyse_exp = TICK_ETERNITY;
+	return 0;
 }
 
 /* This stream analyser works on a request. It applies all sticking rules on
@@ -869,7 +840,6 @@ struct task *process_session(struct task *t)
 	unsigned int rqf_last, rpf_last;
 	unsigned int req_ana_back;
 
-    Warning("invoke process_session( t = %p )\n", t);
 	//DPRINTF(stderr, "%s:%d: cs=%d ss=%d(%d) rqf=0x%08x rpf=0x%08x\n", __FUNCTION__, __LINE__,
 	//        s->si[0].state, s->si[1].state, s->si[1].err_type, s->req->flags, s->rep->flags);
 

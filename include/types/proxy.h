@@ -47,7 +47,6 @@
 #include <types/session.h>
 #include <types/server.h>
 #include <types/stick_table.h>
-#include <types/hashtbl.h>
 
 /* values for proxy->state */
 #define PR_STNEW        0
@@ -187,7 +186,6 @@ struct proxy {
 	struct list block_cond;                 /* early blocking conditions (chained) */
 	struct list redirect_rules;             /* content redirecting rules (chained) */
 	struct list switching_rules;            /* content switching rules (chained) */
-        HASHTBL *switching_hashtbl;             /* TODO cwl hashtable for switching TODO cwl end */
 	struct list persist_rules;		/* 'force-persist' and 'ignore-persist' rules (chained) */
 	struct list sticking_rules;             /* content sticking rules (chained) */
 	struct list storersp_rules;             /* content store response rules (chained) */
@@ -355,12 +353,7 @@ struct redirect_rule {
 
 extern struct proxy *proxy;
 extern struct eb_root used_proxy_id;	/* list of proxy IDs in use */
-// TODO cwl union backend
-union be {
-    struct proxy *backend;
-    char *name;
-};
-// TODO cwl end union backend
+
 #endif /* _TYPES_PROXY_H */
 
 /*
@@ -369,5 +362,3 @@ union be {
  *  c-basic-offset: 8
  * End:
  */
-
-

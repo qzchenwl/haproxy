@@ -63,7 +63,6 @@
 #include <common/time.h>
 #include <common/uri_auth.h>
 #include <common/version.h>
-#include <common/debug.h>
 
 #include <types/capture.h>
 #include <types/global.h>
@@ -965,7 +964,6 @@ void run_poll_loop()
 
 	tv_update_date(0,1);
 	while (1) {
-        DPRINTF(stderr, "** main while **\n");
 		/* check if we caught some signals and process them */
 		signal_process_queue();
 
@@ -1204,14 +1202,8 @@ int main(int argc, char **argv)
 				protocol_unbind_all();
 				exit(1); /* there has been an error */
 			}
-			else if (ret == 0) /* child breaks here */ 
-            {
-                Warning("I am child( %d ) !!!!\n", getpid());
-				break; // TODO do NOT delete this line //cwl
-            }
-            else {
-                Warning("I am father( %d ) !!!!\n", getpid());
-            }
+			else if (ret == 0) /* child breaks here */
+				break;
 			if (pidfile != NULL) {
 				fprintf(pidfile, "%d\n", ret);
 				fflush(pidfile);
@@ -1227,7 +1219,6 @@ int main(int argc, char **argv)
 		free(global.chroot);  global.chroot = NULL;
 		free(global.pidfile); global.pidfile = NULL;
 
-        Warning("I am %d\n", getpid());
 		/* we might have to unbind some proxies from some processes */
 		px = proxy;
 		while (px != NULL) {
@@ -1246,25 +1237,21 @@ int main(int argc, char **argv)
 		 * it would have already be done, and 0-2 would have been affected to listening
 		 * sockets
 		 */
-                if (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE)) {
-                    /* detach from the tty */
-                    Warning("TO BE QUIET?!\n");
-                    fclose(stdin); fclose(stdout); fclose(stderr);
-                    global.mode &= ~MODE_VERBOSE;
-                    global.mode |= MODE_QUIET; /* ensure that we won't say anything from now */
-                    Warning("OF COURSE NOT!!\n");
-                }
+		if (!(global.mode & MODE_QUIET) || (global.mode & MODE_VERBOSE)) {
+			/* detach from the tty */
+			fclose(stdin); fclose(stdout); fclose(stderr);
+			global.mode &= ~MODE_VERBOSE;
+			global.mode |= MODE_QUIET; /* ensure that we won't say anything from now */
+		}
 		pid = getpid(); /* update child's pid */
 		setsid();
 		fork_poller();
 	}
 
-    Warning("%d do protocol_enable_all()\n", getpid());
 	protocol_enable_all();
 	/*
 	 * That's it : the central polling loop. Run until we stop.
 	 */
-    Warning("%d do run_poll_loop()\n", getpid());
 	run_poll_loop();
 
 	/* Free all Hash Keys and all Hash elements */

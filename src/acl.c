@@ -661,11 +661,6 @@ int acl_parse_ip(const char **text, struct acl_pattern *pattern, int *opaque)
  */
 void acl_register_keywords(struct acl_kw_list *kwl)
 {
-    int i;
-    Warning("invoke acl_register_keywords( kwl = %p )\n", kwl);
-    for (i = 0; kwl->kw[i].kw != NULL; i++) {
-        Warning("add acl keyword: %s\n", kwl->kw[i].kw);
-    }
 	LIST_ADDQ(&acl_keywords.list, &kwl->list);
 }
 

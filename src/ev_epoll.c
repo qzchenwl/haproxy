@@ -20,7 +20,6 @@
 #include <common/ticks.h>
 #include <common/time.h>
 #include <common/tools.h>
-#include <common/debug.h>
 
 #include <types/fd.h>
 #include <types/global.h>
@@ -229,7 +228,6 @@ REGPRM2 static void _do_poll(struct poller *p, int exp)
 	int fd;
 	int count;
 	int wait_time;
-    DPRINTF(stderr, "invoke _do_poll( p = %p, exp = %d)\n", p, exp);
 
 	if (likely(nbchanges))
 		fd_flush_changes();
