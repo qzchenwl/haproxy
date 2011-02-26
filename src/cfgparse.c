@@ -32,6 +32,7 @@
 #include <common/standard.h>
 #include <common/time.h>
 #include <common/uri_auth.h>
+#include <common/hashtbl.h>
 
 #include <types/capture.h>
 #include <types/global.h>
@@ -917,6 +918,11 @@ static void init_new_proxy(struct proxy *p)
 	LIST_INIT(&p->tcp_req.inspect_rules);
 	LIST_INIT(&p->req_add);
 	LIST_INIT(&p->rsp_add);
+
+    if (!HASHTBL_INIT(p->switching_hashtbl)) {
+        Alert("init switching_hashtbl for proxy %s failed\n", p->id);
+        exit(1);
+    }
 
 	/* Timeouts are defined as -1 */
 	proxy_reset_timeouts(p);
@@ -2226,13 +2232,15 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 			goto out;
 		}
 
-		if (strcmp(args[2], "if") != 0 && strcmp(args[2], "unless") != 0) {
-			Alert("parsing [%s:%d] : '%s' requires either 'if' or 'unless' followed by a condition.\n",
+		if (strcmp(args[2], "if") != 0 && strcmp(args[2], "unless") != 0 \
+                && strcmp(args[2], "hash") != 0) {
+			Alert("parsing [%s:%d] : '%s' requires either 'if' or 'unless' or 'hash' followed by a condition.\n",
 			      file, linenum, args[0]);
 			err_code |= ERR_ALERT | ERR_FATAL;
 			goto out;
 		}
 
+        if (strcmp(args[2], "if") == 0 || strcmp(args[2], "unless") == 0) {
 		if ((cond = build_acl_cond(file, linenum, curproxy, (const char **)args + 2)) == NULL) {
 			Alert("parsing [%s:%d] : error detected while parsing switching rule.\n",
 			      file, linenum);
@@ -2247,6 +2255,19 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 		rule->be.name = strdup(args[1]);
 		LIST_INIT(&rule->list);
 		LIST_ADDQ(&curproxy->switching_rules, &rule->list);
+        } // end if args[2] == 'if' or 'unless'
+        else { // args[2] must be 'hash' here
+            if (*args[3]) {
+                char *be_name = strdup(args[1]);
+                hashtbl_insert(curproxy->switching_hashtbl, args[3], be_name);
+                Warning("new hash enry %s:%s\n", args[3], be_name);
+                //hashtbl_dump(curproxy->switching_hashtbl, stdin); // del me
+            }
+            else {
+                Warning("missing domain name as a hash key\n");
+                // exit or just ignore and continue ?
+            }
+        }
 	}
 	else if ((!strcmp(args[0], "force-persist")) ||
 		 (!strcmp(args[0], "ignore-persist"))) {
@@ -5114,6 +5135,33 @@ int check_config_validity()
 					(target->bind_proc | curproxy->bind_proc) : 0;
 			}
 		}
+        
+        /* find the target proxy for 'use_backend' hash entries */
+        ENTRY *node;
+        int i;
+        for (i = 0; i < curproxy->switching_hashtbl->size; ++i) {
+            for (node = curproxy->switching_hashtbl->nodes[i]; node; \
+                    node = node->next) {
+                struct proxy *target;
+                char *be_name = (char *)node->data;
+                target = findproxy_mode(be_name, curproxy->mode, PR_CAP_BE);
+                if (!target) {
+                    Alert("Proxy '%s': unable to find required use_backend: '%s'.\n",
+                            curproxy->id, be_name);
+                    cfgerr++;
+                } else if (target == curproxy) {
+                    Alert("Proxy '%s': loop detected for use_backend: '%s'.\n",
+                            curproxy->id, be_name);
+                    cfgerr++;
+                } else {
+                    Warning("find backend %s(%p)\n", be_name, target);
+                    free(node->data);
+                    node->data = target;
+                    target->bind_proc = curproxy->bind_proc ?
+                        (target->bind_proc | curproxy->bind_proc) : 0;
+                }
+            }
+        }
 
 		/* find the target table for 'stick' rules */
 		list_for_each_entry(mrule, &curproxy->sticking_rules, list) {

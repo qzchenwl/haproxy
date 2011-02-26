@@ -577,6 +577,28 @@ int process_switching_rules(struct session *s, struct buffer *req, int an_bit)
 	if (!(s->flags & SN_BE_ASSIGNED)) {
 		struct switching_rule *rule;
 
+                struct hdr_ctx ctx;
+                int backend_entry_found = 0;
+                memset(&ctx, 0, sizeof(ctx));
+
+                if(http_find_header("host", s->txn.req.sol, &s->txn.hdr_idx, &ctx)) {
+                    char *host;
+                    struct proxy *backend;
+                    host = strndup(ctx.line + ctx.val, ctx.vlen);
+                    Warning("request host: %s\n", host);
+                    backend = hashtbl_get(s->fe->switching_hashtbl, host);
+                    free(host);
+                    if (backend) {
+                        Warning("get backend(%p) from hashtbl\n", backend);
+                        if (!session_set_backend(s, backend))
+                            goto sw_failed;
+                        backend_entry_found = 1;
+                    } else {
+                        Warning("host not hashed\n");
+                    }
+                }
+
+                if (!backend_entry_found) {
 		list_for_each_entry(rule, &s->fe->switching_rules, list) {
 			int ret;
 
@@ -591,6 +613,7 @@ int process_switching_rules(struct session *s, struct buffer *req, int an_bit)
 				break;
 			}
 		}
+                }
 
 		/* To ensure correct connection accounting on the backend, we
 		 * have to assign one if it was not set (eg: a listen). This
