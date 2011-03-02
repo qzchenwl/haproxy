@@ -35,6 +35,14 @@ int srv_getinter(struct server *s) {
 	return (s->fastinter)?(s->fastinter):(s->inter);
 }
 
+int srv_setaddr(char *addr) {
+    return 0;
+}
+
+int srv_setcookie(char *cookie) {
+    return 0;
+}
+
 
 /*
  * Local variables:

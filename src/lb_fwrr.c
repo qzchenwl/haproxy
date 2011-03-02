@@ -94,6 +94,9 @@ out_update_backend:
  */
 static void fwrr_set_server_status_up(struct server *srv)
 {
+    if (1) {
+        Warning("fwrr_set_server_status_up(%s)\n", srv->id);
+    }
 	struct proxy *p = srv->proxy;
 	struct fwrr_group *grp;
 
@@ -263,6 +266,7 @@ static inline void fwrr_queue_by_weight(struct eb_root *root, struct server *s)
  */
 void fwrr_init_server_groups(struct proxy *p)
 {
+    Warning("fwrr_init_server_groups( %s )\n", p->id);
 	struct server *srv;
 	struct eb_root init_head = EB_ROOT;
 
@@ -416,24 +420,37 @@ static inline void fwrr_switch_trees(struct fwrr_group *grp)
  */
 static struct server *fwrr_get_server_from_group(struct fwrr_group *grp)
 {
-	struct eb32_node *node;
-	struct server *s;
+	struct eb32_node *node, *node_;
+	struct server *s, *s_;
 
 	node = eb32_first(&grp->curr);
+    node_ = eb32_last(&grp->curr);
 	s = eb32_entry(node, struct server, lb_node);
+    s_ = eb32_entry(node_, struct server, lb_node);
+    if (node && node_) {
+    Warning("FIRST: %s, LAST:%s\n", s->id, s_->id);
+    } else {
+        Warning("no node in grp->curr\n");
+    }
 	
+    if (!node || Warning("npos = %d, curr_pos = %d, >\n", s->npos, grp->curr_pos));
 	if (!node || s->npos > grp->curr_pos) {
 		/* either we have no server left, or we have a hole */
-		struct eb32_node *node2;
+		struct eb32_node *node2, *node3;
+        struct server *s2;
 		node2 = eb32_first(grp->init);
+        node3 = eb32_last(grp->init);
 		if (node2) {
 			node = node2;
 			s = eb32_entry(node, struct server, lb_node);
+            s2 = eb32_entry(node3, struct server, lb_node);
+            Warning("first: %s, last: %s\n", s->id, s2->id);
 			fwrr_get_srv_init(s);
 			if (s->eweight == 0) /* FIXME: is it possible at all ? */
 				node = NULL;
 		}
 	}
+    Warning("fwrr_get_server_from_group(%p) = %s\n", grp, s->id);
 	if (node)
 		return s;
 	else
@@ -521,6 +538,7 @@ struct server *fwrr_get_next_server(struct proxy *p, struct server *srvtoavoid)
 		 * to a better place afterwards.
 		 */
 		fwrr_update_position(grp, srv);
+        Warning("dequeue srv %s\n", srv->id);
 		fwrr_dequeue_srv(srv);
 		grp->curr_pos++;
 		if (!srv->maxconn || (!srv->nbpend && srv->served < srv_dynamic_maxconn(srv))) {
@@ -565,6 +583,7 @@ struct server *fwrr_get_next_server(struct proxy *p, struct server *srvtoavoid)
 			} while (full);
 		}
 	}
+    Warning("fwrr_get_next_server(%s, %s) = %s\n", p?p->id:"(nil)", srvtoavoid?srvtoavoid->id:"(nil)", srv?srv->id:"(nil)");
 	return srv;
 }
 

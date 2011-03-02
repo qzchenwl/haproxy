@@ -2511,6 +2511,7 @@ int cfg_parse_listen(const char *file, int linenum, char **args, int kwm)
 			rule->cond = cond;
 			LIST_INIT(&rule->list);
 			LIST_ADDQ(&curproxy->uri_auth->admin_rules, &rule->list);
+            Warning("%s add admin rules %s\n", curproxy->id, args[3]);
 		} else if (!strcmp(args[1], "uri")) {
 			if (*(args[2]) == 0) {
 				Alert("parsing [%s:%d] : 'uri' needs an URI prefix.\n", file, linenum);

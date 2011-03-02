@@ -2893,7 +2893,11 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
 				}
 				else if (strcmp(value, "enable") == 0) {
 					action = 2;
-				} else {
+				}
+                else if (strcmp(value, "add") == 0) {
+                    action = 3;
+                }
+                else {
 					/* unknown action, no need to continue */
 					break;
 				}
@@ -2919,6 +2923,14 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
 						break;
 					}
 				}
+                else {
+                    switch (action) {
+                        case 3:
+                            Warning("addserver(\"%s\", \"%s\", \"%s\", \"%s\"\n", backend, value, "10.250.6.131:80", "localrs");
+                            addserver(backend, value, "10.250.6.131:80", "localrs");
+                            break;
+                    }
+                }
 			}
 			next_param = cur_param;
 		}
@@ -3148,7 +3160,7 @@ int http_process_req_common(struct session *s, struct buffer *req, int an_bit, s
 				/* no rule, or the rule matches */
 				s->data_ctx.stats.flags |= STAT_ADMIN;
 				break;
-			}
+            }
 		}
 
 		/* Was the status page requested with a POST ? */
