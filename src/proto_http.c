@@ -2930,10 +2930,22 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
             delserver(backend, server);
         }
     }
-    // else if {}
+#if 0
+    else if (!strcmp(action, "delall")) {
+        char *backend, *server;
+        backend = (char *)hashtbl_get(kv_tbl, "backend");
+        px = backend ? findproxy(backend, PR_CAP_BE) : NULL;
+        if (px) {
+            while (px->srv) {
+                server = px->srv->id;
+                delserver(backend, server);
+            }
+        }
+    }
+#endif
     else {
     }
-	return 0;
+    return 0;
 }
 
 /* This stream analyser runs all HTTP request processing which is common to
