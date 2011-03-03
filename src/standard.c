@@ -248,7 +248,6 @@ struct sockaddr_in *str2sa(char *str)
 		sa.sin_addr = *(struct in_addr *) *(he->h_addr_list);
 	}
 	sa.sin_port   = htons(port);
-    Warning("%s %s:%d\n", str, inet_ntoa(sa.sin_addr), port);
 	sa.sin_family = AF_INET;
 	ret = &sa;
  out:

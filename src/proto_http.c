@@ -35,6 +35,7 @@
 #include <common/time.h>
 #include <common/uri_auth.h>
 #include <common/version.h>
+#include <common/hashtbl.h>
 
 #include <types/capture.h>
 #include <types/global.h>
@@ -2832,8 +2833,7 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
 	struct proxy *px;
 	struct server *sv;
 
-	char *backend = NULL;
-	int action = 0;
+    HASHTBL *kv_tbl = hashtbl_create(10, NULL);
 
 	char *first_param, *cur_param, *next_param, *end_params;
 
@@ -2882,59 +2882,57 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
 				/* Ok, a value is found, we can mark the end of the key */
 				*value++ = '\0';
 			}
-
-			/* Now we can check the key to see what to do */
-			if (!backend && strcmp(key, "b") == 0) {
-				backend = value;
-			}
-			else if (!action && strcmp(key, "action") == 0) {
-				if (strcmp(value, "disable") == 0) {
-					action = 1;
-				}
-				else if (strcmp(value, "enable") == 0) {
-					action = 2;
-				}
-                else if (strcmp(value, "add") == 0) {
-                    action = 3;
-                }
-                else {
-					/* unknown action, no need to continue */
-					break;
-				}
-			}
-			else if (strcmp(key, "s") == 0) {
-				if (backend && action && get_backend_server(backend, value, &px, &sv)) {
-					switch (action) {
-					case 1:
-						if (! (sv->state & SRV_MAINTAIN)) {
-							/* Not already in maintenance, we can change the server state */
-							sv->state |= SRV_MAINTAIN;
-							set_server_down(sv);
-							s->data_ctx.stats.st_code = STAT_STATUS_DONE;
-						}
-						break;
-					case 2:
-						if ((sv->state & SRV_MAINTAIN)) {
-							/* Already in maintenance, we can change the server state */
-							set_server_up(sv);
-							sv->health = sv->rise;	/* up, but will fall down at first failure */
-							s->data_ctx.stats.st_code = STAT_STATUS_DONE;
-						}
-						break;
-					}
-				}
-                else {
-                    switch (action) {
-                        case 3:
-                            Warning("addserver(\"%s\", \"%s\", \"%s\", \"%s\"\n", backend, value, "10.250.6.131:80", "localrs");
-                            addserver(backend, value, "10.250.6.131:80", "localrs");
-                            break;
-                    }
-                }
-			}
+            hashtbl_insert(kv_tbl, key, (void *)value);
 			next_param = cur_param;
 		}
 	}
+
+    char *action = (char *)hashtbl_get(kv_tbl, "action");
+    if (!strcmp(action, "enable")) { /* enable a server in maintenance */
+        char *backend, *server;
+        backend = (char *)hashtbl_get(kv_tbl, "backend");
+        server  = (char *)hashtbl_get(kv_tbl, "server");
+        if (backend && server && get_backend_server(backend, server, &px, &sv)) {
+            if ((sv->state & SRV_MAINTAIN)) {
+                set_server_up(sv);
+                sv->health = sv->rise; /* up, but will fall down at first failure */
+                s->data_ctx.stats.st_code = STAT_STATUS_DONE;
+            }
+        }
+    }
+    else if (!strcmp(action, "disable")) { /* disable a server and set to maintain state */
+        char *backend, *server;
+        backend = (char *)hashtbl_get(kv_tbl, "backend");
+        server  = (char *)hashtbl_get(kv_tbl, "server");
+        if (backend && server && get_backend_server(backend, server, &px, &sv)) {
+            if (!(sv->state & SRV_MAINTAIN)) {
+                sv->state |= SRV_MAINTAIN;
+                set_server_down(sv);
+                s->data_ctx.stats.st_code = STAT_STATUS_DONE;
+            }
+        }
+    }
+    else if (!strcmp(action, "addsrv")) {
+        char *backend, *server, *addr, *cookie;
+        backend = (char *)hashtbl_get(kv_tbl, "backend");
+        server  = (char *)hashtbl_get(kv_tbl, "server");
+        addr    = (char *)hashtbl_get(kv_tbl, "addr");
+        cookie  = (char *)hashtbl_get(kv_tbl, "cookie");
+        if (backend && server && addr && cookie) {
+            addserver(backend, server, addr, cookie);
+        }
+    }
+    else if (!strcmp(action, "delsrv")) {
+        char *backend, *server;
+        backend = (char *)hashtbl_get(kv_tbl, "backend");
+        server  = (char *)hashtbl_get(kv_tbl, "server");
+        if (backend && server) {
+            delserver(backend, server);
+        }
+    }
+    // else if {}
+    else {
+    }
 	return 0;
 }
 

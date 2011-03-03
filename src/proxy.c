@@ -372,8 +372,11 @@ struct server *addserver(const char *pxid, const char *svid, const char *addr, c
     struct server *newsrv;
     struct sockaddr_in *sk;
     struct task *t;
+    char *tmp;
+    
+
     if ((px = findproxy(pxid, PR_CAP_BE)) == NULL) {
-        Alert("add server %s failed. proxy %s not found as backend.\n", svid, pxid);
+        Alert("add server %s failed. backend %s not found.\n", svid, pxid);
         return NULL;
     }
     if ((newsrv = findserver(px, svid))) {
@@ -384,10 +387,31 @@ struct server *addserver(const char *pxid, const char *svid, const char *addr, c
         Alert("add server %s failed. out of memory.\n", svid);
         return NULL;
     }
+    
+    tmp = strdup(addr);
+    sk = str2sa(tmp);
+    free(tmp);
+    if (!sk) {
+        Alert("add server %s failed. unkown host %s\n", svid, addr);
+        free(newsrv);
+        return NULL;
+    }
+
+    if ((newsrv->check_data = calloc(global.tune.chksize, sizeof(char))) == NULL) {
+        Alert("add server %s failed. out of memory while allocating memory for check buffer\n", svid);
+        free(newsrv);
+        return NULL;
+    }
+
+    if ((t = task_new()) == NULL) {
+        Alert("add server %s failed. create new task failed.\n", svid);
+        free(newsrv->check_data);
+        free(newsrv);
+        return NULL;
+    }
 
     newsrv->next = px->srv;
     px->srv = newsrv;
-
 
     newsrv->proxy = px;
     newsrv->conf.file = NULL;
@@ -396,20 +420,12 @@ struct server *addserver(const char *pxid, const char *svid, const char *addr, c
     newsrv->state = SRV_MAINTAIN;
     newsrv->last_change = now.tv_sec;
     newsrv->id = strdup(svid);
-    char *tmp = strdup(addr);
-    sk = str2sa(tmp);
-    free(tmp);
-    if (!sk) {
-        Alert("add server %s failed. unkown host %s\n", svid, addr);
-        goto out;
-    }
     newsrv->addr = *sk;
     newsrv->addr.sin_port = sk->sin_port?sk->sin_port:htons(80);
-
     newsrv->cookie = strdup(cookie);
     newsrv->cklen = strlen(cookie);
-
     newsrv->check_port  = ntohs(newsrv->addr.sin_port);
+
     newsrv->inter       = px->defsrv.inter;
     newsrv->fastinter   = px->defsrv.fastinter;
     newsrv->downinter   = px->defsrv.downinter;
@@ -422,72 +438,64 @@ struct server *addserver(const char *pxid, const char *svid, const char *addr, c
     newsrv->onerror     = px->defsrv.onerror;
     newsrv->consecutive_errors_limit
         = px->defsrv.consecutive_errors_limit;
-    newsrv->eweight = newsrv->uweight = newsrv->iweight = px->defsrv.iweight;
+    newsrv->uweight = newsrv->iweight = px->defsrv.iweight;
+
     newsrv->curfd = -1;
     newsrv->health = newsrv->rise;
-
-    if (1) {
-        struct eb32_node *n1, *n2;
-        struct server *s1, *s2;
-        n1 = eb32_first(px->lbprm.fwrr.act.init);
-        n2 = eb32_last(px->lbprm.fwrr.act.init);
-        s1 = eb32_entry(n1, struct server, lb_node);
-        s2 = eb32_entry(n2, struct server, lb_node);
-        if (n1 && n2) {
-            Warning("1tMIN: %s, 1tMAX %s\n", s1->id, s2->id);
-        }
-    }
-    //fwrr_init_server_groups(px);
     newsrv->prev_eweight = newsrv->eweight = newsrv->uweight * BE_WEIGHT_SCALE;
     newsrv->prev_state = newsrv->state;
-    //px->srv_act++;
-    //px->lbprm.tot_wact += newsrv->eweight;
-    //px->lbprm.tot_weight = px->lbprm.tot_wact;
-    //px->lbprm.tot_used = px->srv_act;
-    //newsrv->lb_node.key = SRV_EWGHT_MAX - newsrv->eweight;
-    //eb32_insert(px->lbprm.fwrr.act.init, &newsrv->lb_node);
-    //newsrv->lb_tree = px->lbprm.fwrr.act.init;
-    
-    if(1) {
-        struct eb32_node *n1, *n2;
-        struct server *s1, *s2;
-        n1 = eb32_first(px->lbprm.fwrr.act.init);
-        n2 = eb32_last(px->lbprm.fwrr.act.init);
-        s1 = eb32_entry(n1, struct server, lb_node);
-        s2 = eb32_entry(n2, struct server, lb_node);
-        if (n1 && n2) {
-            Warning("tMIN: %s, tMAX %s\n", s1->id, s2->id);
-        }
-    }
 
-
-
-    if ((newsrv->check_data = calloc(global.tune.chksize, sizeof(char))) == NULL) {
-        Alert("add server %s failed. out of memory while allocating memory for check buffer\n", svid);
-        goto out;
-    }
     newsrv->check_status = HCHK_STATUS_INI;
     newsrv->state |= SRV_CHECKED;
-    // add check task to task queue
-    if ((t = task_new()) == NULL) {
-        Alert("add server %s failed. create new task failed.\n", svid);
-        goto out;
-    }
     newsrv->check = t;
+    newsrv->check_start = now;
+
     t->process = process_chk;
     t->context = newsrv;
     t->expire = tick_add(now_ms, srv_getinter(newsrv));
-    newsrv->check_start = now;
     task_queue(t);
+
     set_server_up(newsrv);
 
-    //px->lbprm.set_server_status_up(newsrv);
-
     return newsrv;
-out:
-    free(newsrv->id);
-    free(newsrv);
-    return NULL;
+}
+
+int delserver(const char *pxid, const char *svid)
+{
+    struct proxy *px;
+    struct server *oldsrv, *presrv, *cursrv;
+    struct task *t;
+    if ((px = findproxy(pxid, PR_CAP_BE)) == NULL) {
+        Alert("del server %s failed. backend %s not found.\n", svid, pxid);
+        return 1;
+    }
+    if ((oldsrv = findserver(px, svid)) == NULL) {
+        Alert("del server %s failed. server not found.\n", svid);
+        return 1;
+    }
+    t = oldsrv->check;
+
+    oldsrv->state |= SRV_MAINTAIN;
+    set_server_down(oldsrv);
+
+    task_delete(t);
+    task_free(t);
+
+    if (px->srv == oldsrv)
+        px->srv = oldsrv->next;
+    else {
+        presrv = px->srv;
+        while (presrv->next != oldsrv)
+            presrv = presrv->next;
+        presrv->next = oldsrv->next;
+    }
+    if (oldsrv->cookie)
+        free(oldsrv->cookie);
+    if (oldsrv->id)
+        free(oldsrv->id);
+    if (oldsrv->check_data)
+        free(oldsrv->check_data);
+    free(oldsrv);
 }
 
 /* This function checks that the designated proxy has no http directives
