@@ -33,6 +33,7 @@
 #include <common/regex.h>
 #include <common/sessionhash.h>
 #include <common/tools.h>
+#include <common/hashtbl.h>
 #include <eb32tree.h>
 
 #include <types/acl.h>
@@ -186,6 +187,7 @@ struct proxy {
 	struct list block_cond;                 /* early blocking conditions (chained) */
 	struct list redirect_rules;             /* content redirecting rules (chained) */
 	struct list switching_rules;            /* content switching rules (chained) */
+    HASHTBL *switching_hashtbl;
 	struct list persist_rules;		/* 'force-persist' and 'ignore-persist' rules (chained) */
 	struct list sticking_rules;             /* content sticking rules (chained) */
 	struct list storersp_rules;             /* content store response rules (chained) */

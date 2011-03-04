@@ -463,7 +463,7 @@ struct server *addserver(const char *pxid, const char *svid, const char *addr, c
 int delserver(const char *pxid, const char *svid)
 {
     struct proxy *px;
-    struct server *oldsrv, *presrv, *cursrv;
+    struct server *oldsrv, *presrv;
     struct task *t;
     if ((px = findproxy(pxid, PR_CAP_BE)) == NULL) {
         Alert("del server %s failed. backend %s not found.\n", svid, pxid);
@@ -496,6 +496,43 @@ int delserver(const char *pxid, const char *svid)
     if (oldsrv->check_data)
         free(oldsrv->check_data);
     free(oldsrv);
+    return 0;
+}
+
+int delbackend(struct proxy *px)
+{
+    struct proxy *curproxy;
+    struct switching_rule *rule;
+
+
+    for (curproxy = proxy; curproxy; curproxy = curproxy->next) {
+        if (curproxy->defbe.be == px) {
+            Warning("proxy '%s' has default proxy '%s'\n", curproxy->id, px->id);
+            return 1;
+        }
+
+        list_for_each_entry(rule, &curproxy->switching_rules, list) {
+            if (rule->be.backend == px) {
+                Warning("proxy '%s' has use_backend '%s'\n", curproxy->id, px->id);
+                return 1;
+            }
+        }
+    }
+    while (px->srv) {
+        delserver(px->id, px->srv->id);
+    }
+
+    if (proxy == px)
+        proxy = px->next;
+    else {
+        curproxy = proxy;
+        while (curproxy->next != px)
+            curproxy = curproxy->next;
+        curproxy->next = px->next;
+    }
+    /* FIXME: free proxy memebers, id, lists...*/
+    free(px);
+    return 0;
 }
 
 /* This function checks that the designated proxy has no http directives
