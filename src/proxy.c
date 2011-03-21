@@ -42,6 +42,7 @@
 #include <proto/queue.h>
 
 
+extern struct proxy defproxy;
 int listeners;	/* # of proxy listeners, set by cfgparse, unset by maintain_proxies */
 struct proxy *proxy  = NULL;	/* list of all existing proxies */
 struct eb_root used_proxy_id = EB_ROOT;	/* list of proxy IDs in use */
@@ -499,6 +500,235 @@ int delserver(const char *pxid, const char *svid)
     return 0;
 }
 
+int addbackend(const char *id)
+{
+    int cap;
+    unsigned int next_pxid = 1;
+    const char *err;
+    struct proxy *curproxy = NULL;
+    cap = PR_CAP_BE | PR_CAP_RS;
+    if (!*id) {
+        Warning("backend needs and <id>\n");
+        return 1;
+    }
+    err = invalid_char(id);
+    if (err) {
+        Warning("charater '%c' is not permitted in backend name '%s'.\n", *err, id);
+        return 1;
+    }
+    for (curproxy = proxy; curproxy != NULL; curproxy = curproxy->next) {
+			/*
+			 * If there are two proxies with the same name only following
+			 * combinations are allowed:
+			 *
+			 *			listen backend frontend ruleset
+			 *	listen             -      -       -        -
+			 *	backend            -      -       OK       -
+			 *	frontend           -      OK      -        -
+			 *	ruleset            -      -       -        -
+			 */
+        if (!strcmp(curproxy->id, id) && \
+                (cap != (PR_CAP_FE|PR_CAP_RS) || curproxy->cap != (PR_CAP_BE|PR_CAP_RS)) &&
+                (cap != (PR_CAP_BE|PR_CAP_RS) || curproxy->cap != (PR_CAP_FE|PR_CAP_RS))) {
+            Warning("'%s' has the same name as another '%s'\n", id, proxy_type_str(curproxy));
+            return 1;
+        }
+    }
+    
+    if ((curproxy = (struct proxy *)calloc(1, sizeof(struct proxy))) == NULL) {
+        Warning("allocate proxy: out of memory\n");
+        return 1;
+    }
+
+    init_new_proxy(curproxy);
+
+    /* DEFAULT SETTINGS */
+	curproxy->mode = PR_MODE_TCP;
+	curproxy->state = PR_STNEW;
+	curproxy->maxconn = cfg_maxpconn;
+	curproxy->conn_retries = CONN_RETRIES;
+	curproxy->logfac1 = curproxy->logfac2 = -1; /* log disabled */
+
+	curproxy->defsrv.inter = DEF_CHKINTR;
+	curproxy->defsrv.fastinter = 0;
+	curproxy->defsrv.downinter = 0;
+	curproxy->defsrv.rise = DEF_RISETIME;
+	curproxy->defsrv.fall = DEF_FALLTIME;
+	curproxy->defsrv.check_port = 0;
+	curproxy->defsrv.maxqueue = 0;
+	curproxy->defsrv.minconn = 0;
+	curproxy->defsrv.maxconn = 0;
+	curproxy->defsrv.slowstart = 0;
+	curproxy->defsrv.onerror = DEF_HANA_ONERR;
+	curproxy->defsrv.consecutive_errors_limit = DEF_HANA_ERRLIMIT;
+	curproxy->defsrv.uweight = curproxy->defsrv.iweight = 1;
+    /* END DEFAULT SETTINGS */
+
+    curproxy->next = proxy;
+    proxy = curproxy;
+    curproxy->conf.file = NULL;
+    curproxy->conf.line = 0;
+    curproxy->last_change = now.tv_sec;
+    curproxy->id = strdup(id);
+    curproxy->cap = cap;
+    curproxy->defsrv.id = "default-server";
+
+    /*
+    // set default values
+    memcpy(&curproxy->defsrv, &defproxy->defsrv, sizeof(curproxy->defsrv));
+    
+    curproxy->state = defproxy.state;
+    curproxy->options = defproxy.options;
+    curproxy->no_options = defproxy.no_options;
+    curproxy->no_options2 = defproxy.no_options2;
+    curproxy->bind_proc = defproxy.bind_proc;
+    curproxy->lbprm.algo = defproxy.lbprm.algo;
+    curproxy->except_net = defproxy.except_net;
+    curproxy->except_mask = defproxy.except_mask;
+    curproxy->except_to = defproxy.except_to;
+    curproxy->except_mask_to = defproxy.except_mask_to;
+
+    if (defproxy.fwdfor_hdr_len) {
+        curproxy->fwdfor_hdr_len = defproxy.fwdfor_hdr_len;
+        curproxy->fwdfor_hdr_name = defproxy.fwdfor_hdr_name;
+    }
+
+    curproxy->fullconn = defproxy.fullconn;
+    curproxy->conn_retries = defproxy.conn_retries;
+    
+    if (defproxy.check_req) {
+        curproxy->check_req = calloc(1, defproxy.check_len);
+        memcpy(curproxy->check_req, defproxy.check_req, defproxy.check_len);
+    }
+    curproxy->check_len = defproxy.check_len;
+
+    if (defproxy.cookie_name)
+        curproxy->cookie_name = strdup(defproxy.cookie_name);
+    curproxy->cookie_len = defproxy.cookie_len;
+    if (defproxy.cookie_domain)
+        curproxy->cookie_domain = strdup(defproxy.cookie_domain);
+
+    if (defproxy.cookie_maxidle)
+        curproxy->cookie_maxidle = defproxy.cookie_maxidle;
+
+    if (defproxy.cookie_maxlife)
+        curproxy->cookie_maxlife = defproxy.cookie_maxlife;
+
+    if (defproxy.rdp_cookie_name)
+        curproxy->rdp_cookie_name = strdup(defproxy.rdp_cookie_name);
+    curproxy->rdp_cookie_len = defproxy.rdp_cookie_len;
+
+    if (defproxy.url_param_name)
+        curproxy->url_param_name = strdup(defproxy.url_param_name);
+    curproxy->url_param_len = defproxy.url_param_len;
+
+    if (defproxy.hh_name)
+        curproxy->hh_name = strdup(defproxy.hh_name);
+    curproxy->hh_len = defproxy.hh_len;
+    curproxy->hh_match_domain = defproxy.hh_match_domain;
+
+    if (defproxy.iface_name)
+        curproxy->iface_name = strdup(defproxy.iface_name);
+    curproxy->iface_len = defproxy.iface_len;
+
+    curproxy->timeout.connect = defproxy.timeout.connect;
+    curproxy->timeout.server = defproxy.timeout.server;
+    curproxy->timeout.check = defproxy.timeout.check;
+    curproxy->timeout.queue = defproxy.timeout.queue;
+    curproxy->timeout.tarpit = defproxy.timeout.tarpit;
+    curproxy->timeout.httpreq = defproxy.timeout.httpreq;
+    curproxy->timeout.httpka = defproxy.timeout.httpka;
+    curproxy->source_addr = defproxy.source_addr;
+
+    //curproxy->mode = defproxy.mode;
+    curproxy->logfac1 = defproxy.logfac1;
+    curproxy->logsrv1 = defproxy.logsrv1;
+    curproxy->loglev1 = defproxy.loglev1;
+    curproxy->minlvl1 = defproxy.minlvl1;
+    curproxy->logfac2 = defproxy.logfac2;
+    curproxy->logsrv2 = defproxy.logsrv2;
+    curproxy->loglev2 = defproxy.loglev2;
+    curproxy->minlvl2 = defproxy.minlvl2;
+    curproxy->grace = defproxy.grace;
+    */
+
+    curproxy->conf.used_listener_id = EB_ROOT;
+    curproxy->conf.used_server_id = EB_ROOT;
+
+
+    // mode http
+    curproxy->mode = PR_MODE_HTTP;
+    // cookie SERVERID insert indirect
+    curproxy->options &= ~PR_O_COOK_ANY;
+    curproxy->options2 &= ~PR_O2_COOK_PSV;
+    curproxy->cookie_maxidle = curproxy->cookie_maxlife = 0;
+    free(curproxy->cookie_domain); curproxy->cookie_domain = NULL;
+    free(curproxy->cookie_name);
+    curproxy->cookie_name = strdup("SERVERID"); // SERVERID
+    curproxy->cookie_len = strlen(curproxy->cookie_name);
+	curproxy->options |= PR_O_COOK_INS; // insert
+    curproxy->options |= PR_O_COOK_IND; // indirect
+    // balance roundrobin
+    curproxy->lbprm.algo |= BE_LB_ALGO_RR;
+
+    next_pxid = get_next_id(&used_proxy_id, next_pxid);
+    curproxy->conf.id.key = curproxy->uuid = next_pxid;
+    eb32_insert(&used_proxy_id, &curproxy->conf.id);
+
+    curproxy->acl_requires |= ACL_USE_L7_ANY;
+
+    if (curproxy->nb_req_cap)
+        curproxy->req_cap_pool = create_pool("ptrcap",
+                curproxy->nb_req_cap * sizeof(char *),
+                MEM_F_SHARED);
+    if (curproxy->nb_rsp_cap)
+        curproxy->rsp_cap_pool = create_pool("ptrcap",
+                curproxy->nb_rsp_cap * sizeof(char *),
+                MEM_F_SHARED);
+    curproxy->hdr_idx_pool = create_pool("hdr_idx",
+            MAX_HTTP_HDR * sizeof(struct hdr_idx_elem),
+            MEM_F_SHARED);
+    if (!curproxy->fullconn)
+        curproxy->fullconn = curproxy->maxconn;
+
+    curproxy->lbprm.wmult = 1;
+    curproxy->lbprm.wdiv = 1;
+    curproxy->lbprm.algo &= ~(BE_LB_LKUP | BE_LB_PROP_DYN);
+    switch (curproxy->lbprm.algo & BE_LB_KIND) {
+        case BE_LB_KIND_RR:
+            if ((curproxy->lbprm.algo & BE_LB_PARM) == BE_LB_RR_STATIC) {
+                curproxy->lbprm.algo |= BE_LB_LKUP_MAP;
+                init_server_map(curproxy);
+            } else {
+                curproxy->lbprm.algo |= BE_LB_LKUP_RRTREE | BE_LB_PROP_DYN;
+                fwrr_init_server_groups(curproxy);
+            }
+            break;
+        case BE_LB_KIND_LC:
+            curproxy->lbprm.algo |= BE_LB_LKUP_LCTREE | BE_LB_PROP_DYN;
+            fwlc_init_server_tree(curproxy);
+            break;
+        case BE_LB_KIND_HI:
+            if ((curproxy->lbprm.algo &BE_LB_HASH_TYPE) == BE_LB_HASH_CONS) {
+                curproxy->lbprm.algo |= BE_LB_LKUP_CHTREE | BE_LB_PROP_DYN;
+                chash_init_server_tree(curproxy);
+            } else {
+                curproxy->lbprm.algo |= BE_LB_LKUP_MAP;
+                init_server_map(curproxy);
+            }
+            break;
+    }
+    if (curproxy->mode == PR_MODE_HTTP) {
+        curproxy->be_req_ana |= AN_REQ_WAIT_HTTP | AN_REQ_HTTP_INNER | AN_REQ_HTTP_PROCESS_BE;
+        curproxy->be_rsp_ana |= AN_RES_WAIT_HTTP | AN_RES_HTTP_PROCESS_BE;
+    }
+    stktable_init(&curproxy->table);
+    if (curproxy->options2 & PR_O2_RDPC_PRST)
+        curproxy->be_req_ana |= AN_REQ_PRST_RDP_COOKIE;
+
+    return 0;
+}
+
 int delbackend(struct proxy *px)
 {
     struct proxy *curproxy;
@@ -532,6 +762,21 @@ int delbackend(struct proxy *px)
     }
     /* FIXME: free proxy memebers, id, lists...*/
     free(px);
+    return 0;
+}
+
+int add_switch_entry(const char *frontend, const char *backend, const char *domain)
+{
+    struct proxy *fe, *be;
+    if ((fe = findproxy(frontend, PR_CAP_FE)) == NULL) {
+        Warning("cannot find frontend '%s'\n", frontend);
+        return 1;
+    }
+    if ((be = findproxy(backend, PR_CAP_BE)) == NULL) {
+        Warning("cannot find backend '%s'\n", backend);
+        return 1;
+    }
+    hashtbl_insert(fe->switching_hashtbl, domain, be);
     return 0;
 }
 

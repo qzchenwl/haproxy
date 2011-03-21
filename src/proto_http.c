@@ -2431,7 +2431,6 @@ int http_wait_for_request(struct session *s, struct buffer *req, int an_bit)
 		}
 	}
 
-
 	/*
 	 * Now we quickly check if we have found a full valid request.
 	 * If not so, we check the FD and buffer states before leaving.
@@ -2819,6 +2818,7 @@ int http_wait_for_request(struct session *s, struct buffer *req, int an_bit)
 
 	req->analysers = 0;
 	req->analyse_exp = TICK_ETERNITY;
+    Warning("http_wait_for_request\n");
 	return 0;
 }
 
@@ -2948,6 +2948,28 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
         if (px) {
             Warning("about to delproxy %s\n", px->id);
             delbackend(px);
+        }
+    }
+    else if (!strcmp(action, "addbe")) {
+        char *backend;
+        backend = (char *)hashtbl_get(kv_tbl, "backend");
+        if (backend) {
+            Warning("about to add proxy %s\n", backend);
+            if (addbackend(backend)) {
+                Warning("error\n");
+            }
+            else {
+                Warning("ok\n");
+            }
+        }
+    }
+    else if (!strcmp(action, "addsw")) {
+        char *frontend, *backend, *domain;
+        frontend    = (char *)hashtbl_get(kv_tbl, "frontend");
+        backend     = (char *)hashtbl_get(kv_tbl, "backend");
+        domain      = (char *)hashtbl_get(kv_tbl, "domain");
+        if (frontend && backend && domain) {
+            add_switch_entry(frontend, backend, domain);
         }
     }
     else {

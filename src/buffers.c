@@ -368,6 +368,7 @@ void buffer_bounce_realign(struct buffer *buf)
 int chunk_printf(struct chunk *chk, const char *fmt, ...)
 {
 	va_list argp;
+    va_list argp2;
 	int ret;
 
 	if (!chk->str || !chk->size)

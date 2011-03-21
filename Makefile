@@ -156,7 +156,7 @@ CFLAGS = $(ARCH_FLAGS) $(CPU_CFLAGS) $(DEBUG_CFLAGS)
 # These LDFLAGS are used as the first "ld" options, regardless of any library
 # path or any other option. They may be changed to add any linker-specific
 # option at the beginning of the ld command line.
-LDFLAGS = $(ARCH_FLAGS) -g
+LDFLAGS = $(ARCH_FLAGS) -g -rdynamic 
 
 #### Target system options
 # Depending on the target platform, some options are set, as well as some
@@ -290,7 +290,8 @@ ifeq ($(SUBVERS),)
 SUBVERS := $(shell cat SUBVERS 2>/dev/null || touch SUBVERS)
 endif
 ifeq ($(VERDATE),)
-VERDATE := $(shell cat VERDATE 2>/dev/null || touch VERDATE)
+#VERDATE := $(shell cat VERDATE 2>/dev/null || touch VERDATE)
+VERDATE := $(shell date +%Y/%m/%d)
 endif
 
 #### Build options

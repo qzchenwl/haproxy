@@ -156,7 +156,7 @@ static const struct cfg_opt cfg_opts2[] =
 };
 
 static char *cursection = NULL;
-static struct proxy defproxy;		/* fake proxy used to assign default values on all instances */
+struct proxy defproxy;		/* fake proxy used to assign default values on all instances */
 int cfg_maxpconn = DEFAULT_MAXCONN;	/* # of simultaneous connections per proxy (-N) */
 int cfg_maxconn = 0;			/* # of simultaneous connections, (-n) */
 
@@ -902,7 +902,7 @@ int cfg_parse_global(const char *file, int linenum, char **args, int kwm)
 /* Perform the most basic initialization of a proxy :
  * memset(), list_init(*), reset_timeouts(*).
  */
-static void init_new_proxy(struct proxy *p)
+void init_new_proxy(struct proxy *p)
 {
 	memset(p, 0, sizeof(struct proxy));
 	LIST_INIT(&p->pendconns);

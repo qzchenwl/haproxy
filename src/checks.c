@@ -1184,8 +1184,12 @@ struct task *process_chk(struct task *t)
  new_chk:
 	if (attempts++ > 0) {
 		/* we always fail to create a server, let's stop insisting... */
-		while (tick_is_expired(t->expire, now_ms))
+		while (tick_is_expired(t->expire, now_ms)) {
+            printf("t->expire = %u, now_ms = %u\n", t->expire, now_ms);
 			t->expire = tick_add(t->expire, MS_TO_TICKS(s->inter));
+            // FIXME
+            printf("s->inter = %u, t->expire = %u\n", MS_TO_TICKS(s->inter), t->expire);
+        }
 		return t;
 	}
 	fd = s->curfd;
