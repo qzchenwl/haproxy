@@ -40,9 +40,9 @@
 #include <proto/server.h>
 #include <proto/task.h>
 #include <proto/queue.h>
+#include <proto/session.h>
 
 
-extern struct proxy defproxy;
 int listeners;	/* # of proxy listeners, set by cfgparse, unset by maintain_proxies */
 struct proxy *proxy  = NULL;	/* list of all existing proxies */
 struct eb_root used_proxy_id = EB_ROOT;	/* list of proxy IDs in use */
@@ -500,6 +500,171 @@ int delserver(const char *pxid, const char *svid)
     return 0;
 }
 
+int addfrontend(const char *id, char *addr)
+{
+    int cap;
+    unsigned int next_pxid = 1;
+    const char *err;
+    struct proxy *curproxy = NULL;
+    struct listener *new_listen, *last_listen, *listener;
+    cap = PR_CAP_FE | PR_CAP_RS;
+    // new proxy
+    if (!*id) {
+        Warning("frontend needs an <id>\n");
+        return 1;
+    }
+    err = invalid_char(id);
+    if (err) {
+        Warning("character '%c' is not permitted in frontend name '%s'.\n", *err, id);
+        return 1;
+    }
+    for (curproxy = proxy; curproxy != NULL; curproxy = curproxy->next) {
+			/*
+			 * If there are two proxies with the same name only following
+			 * combinations are allowed:
+			 *
+			 *			listen backend frontend ruleset
+			 *	listen             -      -       -        -
+			 *	backend            -      -       OK       -
+			 *	frontend           -      OK      -        -
+			 *	ruleset            -      -       -        -
+			 */
+        if (!strcmp(curproxy->id, id) && \
+                (cap != (PR_CAP_FE|PR_CAP_RS) || curproxy->cap != (PR_CAP_BE|PR_CAP_RS)) &&
+                (cap != (PR_CAP_BE|PR_CAP_RS) || curproxy->cap != (PR_CAP_FE|PR_CAP_RS))) {
+            Warning("'%s' has the same name as another '%s'\n", id, proxy_type_str(curproxy));
+            return 1;
+        }
+    }
+    
+    if ((curproxy = (struct proxy*)calloc(1,sizeof(struct proxy))) == NULL) {
+        Warning("allocate proxy: out of memory\n");
+        return 1;
+    }
+
+    init_new_proxy(curproxy);
+    /* DEFAULT SETTINGS */
+    {
+	curproxy->mode = PR_MODE_TCP;
+	curproxy->state = PR_STNEW;
+	curproxy->maxconn = cfg_maxpconn;
+	curproxy->conn_retries = CONN_RETRIES;
+	curproxy->logfac1 = curproxy->logfac2 = -1; /* log disabled */
+
+	curproxy->defsrv.inter = DEF_CHKINTR;
+	curproxy->defsrv.fastinter = 0;
+	curproxy->defsrv.downinter = 0;
+	curproxy->defsrv.rise = DEF_RISETIME;
+	curproxy->defsrv.fall = DEF_FALLTIME;
+	curproxy->defsrv.check_port = 0;
+	curproxy->defsrv.maxqueue = 0;
+	curproxy->defsrv.minconn = 0;
+	curproxy->defsrv.maxconn = 0;
+	curproxy->defsrv.slowstart = 0;
+	curproxy->defsrv.onerror = DEF_HANA_ONERR;
+	curproxy->defsrv.consecutive_errors_limit = DEF_HANA_ERRLIMIT;
+	curproxy->defsrv.uweight = curproxy->defsrv.iweight = 1;
+    }
+    /* END DEFAULT SETTINGS */
+
+    curproxy->next = proxy;
+    proxy = curproxy;
+    curproxy->conf.file = NULL;
+    curproxy->conf.line = 0;
+    curproxy->last_change = now.tv_sec;
+    curproxy->id = strdup(id);
+    curproxy->cap = cap;
+    curproxy->defsrv.id = "default-server";
+
+    /* initialize error relocations (nothing to init)*/
+
+    curproxy->conf.used_listener_id = EB_ROOT;
+    curproxy->conf.used_server_id = EB_ROOT;
+
+    /* Now let's parse the bind */
+    if (strchr(addr, ':') == NULL) {
+        Warning("addr expects [addr1]:port1[-end1]{,[addr:port[-end]}..\n");
+        return 1;
+    }
+    if (!str2listener(addr, curproxy)) {
+        return 1;
+    }
+    curproxy->mode = PR_MODE_HTTP;
+
+    /* validity */
+    curproxy->conf.id.key = curproxy->uuid = get_next_id(&used_proxy_id, 1);
+    eb32_insert(&used_proxy_id, &curproxy->conf.id);
+
+    curproxy->acl_requires |= ACL_USE_L7_ANY;
+
+    if (curproxy->nb_req_cap)
+        curproxy->req_cap_pool = create_pool("ptrcap",
+                curproxy->nb_req_cap * sizeof(char *),
+                MEM_F_SHARED);
+    if (curproxy->nb_rsp_cap)
+        curproxy->rsp_cap_pool = create_pool("ptrcap",
+                curproxy->nb_rsp_cap * sizeof(char *),
+                MEM_F_SHARED);
+
+    curproxy->hdr_idx_pool = create_pool("hdr_idx",
+            MAX_HTTP_HDR * sizeof(struct hdr_idx_elem),
+            MEM_F_SHARED);
+
+    if (!curproxy->fullconn)
+        curproxy->fullconn = curproxy->maxconn;
+
+    if (curproxy->tcp_req.inspect_delay ||
+            !LIST_ISEMPTY(&curproxy->tcp_req.inspect_rules))
+        curproxy->fe_req_ana |= AN_REQ_INSPECT;
+
+    if (curproxy->mode == PR_MODE_HTTP) {
+        curproxy->fe_req_ana |= AN_REQ_WAIT_HTTP | AN_REQ_HTTP_PROCESS_FE;
+        curproxy->fe_rsp_ana |= AN_RES_WAIT_HTTP | AN_RES_HTTP_PROCESS_FE;
+    }
+
+    /* both TCP and HTTP must check switching rules */
+    curproxy->fe_req_ana |= AN_REQ_SWITCHING_RULES;
+
+    last_listen = curproxy->listen;
+    while (last_listen) {
+        if (!last_listen->luid) {
+            last_listen->conf.id.key = last_listen->luid \
+                = get_next_id(&curproxy->conf.used_listener_id, 1);
+            eb32_insert(&curproxy->conf.used_listener_id, \
+                &last_listen->conf.id);
+        }
+        if (curproxy->options2 & PR_O2_SOCKSTAT) {
+            last_listen->counters = (struct licounters *)\
+                calloc(1, sizeof(struct licounters));
+            if (!last_listen->name) {
+                sprintf(trash, "sock-%d", last_listen->luid);
+                last_listen->name = strdup(trash);
+            }
+        }
+
+        if (curproxy->options & PR_O_TCP_NOLING)
+            last_listen->options |= LI_O_NOLINGER;
+        last_listen->maxconn = curproxy->maxconn;
+        last_listen->backlog = curproxy->backlog;
+        last_listen->timeout = &curproxy->timeout.client;
+        last_listen->accept = event_accept;
+        last_listen->private = curproxy;
+        last_listen->handler = process_session;
+        last_listen->analysers |= curproxy->fe_req_ana;
+
+        if ((curproxy->options2 & PR_O2_SMARTACC) ||
+            (curproxy->mode == PR_MODE_HTTP &&
+             !(curproxy->no_options2 & PR_O2_SMARTACC)))
+            last_listen->options |= LI_O_NOQUICKACK;
+
+        last_listen = last_listen->next;
+    }
+
+    start_proxies(1);
+    protocol_bind_all();
+    return 0;
+}
+
 int addbackend(const char *id)
 {
     int cap;
@@ -507,13 +672,14 @@ int addbackend(const char *id)
     const char *err;
     struct proxy *curproxy = NULL;
     cap = PR_CAP_BE | PR_CAP_RS;
+    // new proxy
     if (!*id) {
         Warning("backend needs and <id>\n");
         return 1;
     }
     err = invalid_char(id);
     if (err) {
-        Warning("charater '%c' is not permitted in backend name '%s'.\n", *err, id);
+        Warning("character '%c' is not permitted in backend name '%s'.\n", *err, id);
         return 1;
     }
     for (curproxy = proxy; curproxy != NULL; curproxy = curproxy->next) {
@@ -543,6 +709,7 @@ int addbackend(const char *id)
     init_new_proxy(curproxy);
 
     /* DEFAULT SETTINGS */
+    {
 	curproxy->mode = PR_MODE_TCP;
 	curproxy->state = PR_STNEW;
 	curproxy->maxconn = cfg_maxpconn;
@@ -562,6 +729,7 @@ int addbackend(const char *id)
 	curproxy->defsrv.onerror = DEF_HANA_ONERR;
 	curproxy->defsrv.consecutive_errors_limit = DEF_HANA_ERRLIMIT;
 	curproxy->defsrv.uweight = curproxy->defsrv.iweight = 1;
+    }
     /* END DEFAULT SETTINGS */
 
     curproxy->next = proxy;
@@ -669,6 +837,7 @@ int addbackend(const char *id)
 	curproxy->options |= PR_O_COOK_INS; // insert
     curproxy->options |= PR_O_COOK_IND; // indirect
     // balance roundrobin
+    curproxy->lbprm.algo &= ~BE_LB_ALGO;
     curproxy->lbprm.algo |= BE_LB_ALGO_RR;
 
     next_pxid = get_next_id(&used_proxy_id, next_pxid);
@@ -735,6 +904,7 @@ int delbackend(struct proxy *px)
     struct switching_rule *rule;
 
 
+    // TODO stop_proxy(curproxy);
     for (curproxy = proxy; curproxy; curproxy = curproxy->next) {
         if (curproxy->defbe.be == px) {
             Warning("proxy '%s' has default proxy '%s'\n", curproxy->id, px->id);

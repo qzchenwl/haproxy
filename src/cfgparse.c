@@ -156,7 +156,7 @@ static const struct cfg_opt cfg_opts2[] =
 };
 
 static char *cursection = NULL;
-struct proxy defproxy;		/* fake proxy used to assign default values on all instances */
+static struct proxy defproxy;		/* fake proxy used to assign default values on all instances */
 int cfg_maxpconn = DEFAULT_MAXCONN;	/* # of simultaneous connections per proxy (-N) */
 int cfg_maxconn = 0;			/* # of simultaneous connections, (-n) */
 
@@ -174,7 +174,7 @@ static struct cfg_kw_list cfg_keywords = {
  * This can be repeated as many times as necessary, separated by a coma.
  * Function returns 1 for success or 0 if error.
  */
-static int str2listener(char *str, struct proxy *curproxy)
+int str2listener(char *str, struct proxy *curproxy)
 {
 	struct listener *l;
 	char *c, *next, *range, *dupstr;

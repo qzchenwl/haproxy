@@ -2972,6 +2972,13 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
             add_switch_entry(frontend, backend, domain);
         }
     }
+    else if (!strcmp(action, "addfe")) {
+        char *frontend, *addr;
+        frontend    = (char *)hashtbl_get(kv_tbl, "frontend");
+        addr        = (char *)hashtbl_get(kv_tbl, "addr");
+        if (frontend && addr)
+            addfrontend(frontend, addr);
+    }
     else {
     }
     return 0;

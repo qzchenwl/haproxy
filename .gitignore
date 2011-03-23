@@ -18,3 +18,7 @@ dlmalloc.c
 tags
 cscope.*
 *.cfg
+tmp/*
+.project
+.cproject
+.cdtproject

@@ -25,7 +25,6 @@
  *
  */
 
-#include <execinfo.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -988,25 +987,6 @@ void run_poll_loop()
 	}
 }
 
-void bt(int sig)
-{
-    printf("bt()\n");
-    void *array[10];
-    size_t size;
-    char **strings;
-    size_t i;
-
-    size = backtrace(array, 10);
-    strings = backtrace_symbols (array, size);
-
-    printf("Obtained %zd stack frames.\n", size);
-
-    for (i = 0; i < size; i++)
-        printf("%s\n", strings[i]);
-    free(strings);
-    exit(1);
-}
-
 int main(int argc, char **argv)
 {
 	int err, retry;
@@ -1014,8 +994,6 @@ int main(int argc, char **argv)
 	FILE *pidfile = NULL;
 	init(argc, argv);
 
-    //signal_register(SIGFPE, bt);
-    //signal(SIGFPE, bt);
 	signal_register(SIGQUIT, dump);
 	signal_register(SIGUSR1, sig_soft_stop);
 	signal_register(SIGHUP, sig_dump_state);
