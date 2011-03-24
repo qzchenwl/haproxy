@@ -2974,10 +2974,19 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
     }
     else if (!strcmp(action, "addfe")) {
         char *frontend, *addr;
+        char *opts[] = {NULL, NULL};
         frontend    = (char *)hashtbl_get(kv_tbl, "frontend");
         addr        = (char *)hashtbl_get(kv_tbl, "addr");
+        opts[0] = addr;
         if (frontend && addr)
-            addfrontend(frontend, addr);
+            create_proxy(frontend, PR_CAP_FE|PR_CAP_RS, opts);
+            //addfrontend(frontend, addr);
+    }
+    else if (!strcmp(action, "delfe")) {
+        char *frontend;
+        frontend    = (char*)hashtbl_get(kv_tbl, "frontend");
+        if (frontend)
+            delfrontend(frontend);
     }
     else {
     }

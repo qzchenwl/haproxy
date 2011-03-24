@@ -502,6 +502,7 @@ int delserver(const char *pxid, const char *svid)
 
 int addfrontend(const char *id, char *addr)
 {
+    Warning("addfrontend(%s, %s)\n", id, addr);
     int cap;
     unsigned int next_pxid = 1;
     const char *err;
@@ -663,6 +664,32 @@ int addfrontend(const char *id, char *addr)
     start_proxies(1);
     protocol_bind_all();
     return 0;
+}
+
+int delfrontend(const char *id)
+{
+    struct proxy *curproxy, *px;
+    struct switching_rule *rule;
+    px = findproxy(id, PR_CAP_FE);
+    if (!curproxy) {
+        Warning("frontend '%s' not found\n", id);
+        return 1;
+    }
+
+    stop_proxy(px);
+
+    if (proxy == px)
+        proxy = px->next;
+    else {
+        curproxy = proxy;
+        while (curproxy->next != px)
+            curproxy = curproxy->next;
+        curproxy->next = px->next;
+    }
+
+    /* FIXME free proxy 
+     * TODO define free_proxy(struct proxy*) function*/
+    free(px);
 }
 
 int addbackend(const char *id)
@@ -903,8 +930,6 @@ int delbackend(struct proxy *px)
     struct proxy *curproxy;
     struct switching_rule *rule;
 
-
-    // TODO stop_proxy(curproxy);
     for (curproxy = proxy; curproxy; curproxy = curproxy->next) {
         if (curproxy->defbe.be == px) {
             Warning("proxy '%s' has default proxy '%s'\n", curproxy->id, px->id);
@@ -921,6 +946,8 @@ int delbackend(struct proxy *px)
     while (px->srv) {
         delserver(px->id, px->srv->id);
     }
+
+    // NOTE stop_proxy(curproxy);
 
     if (proxy == px)
         proxy = px->next;
