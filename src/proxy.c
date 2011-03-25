@@ -366,7 +366,7 @@ struct server *findserver(const struct proxy *px, const char *name) {
 
 	return target;
 }
-
+#if 0
 struct server *addserver(const char *pxid, const char *svid, const char *addr, const char *cookie)
 {
     struct proxy *px;
@@ -460,6 +460,7 @@ struct server *addserver(const char *pxid, const char *svid, const char *addr, c
 
     return newsrv;
 }
+#endif 
 
 int delserver(const char *pxid, const char *svid)
 {

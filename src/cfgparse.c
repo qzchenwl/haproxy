@@ -5794,7 +5794,7 @@ void cfg_unregister_keywords(struct cfg_kw_list *kwl)
 	LIST_INIT(&kwl->list);
 }
 
-struct proxy* create_proxy(char *name, int cap, char *opts[])
+struct proxy* create_proxy(const char *name, int cap, char *opts[])
 {
     struct proxy *curproxy;
     const char *err;
@@ -5845,7 +5845,7 @@ struct proxy* create_proxy(char *name, int cap, char *opts[])
     curproxy->cap = cap;
 
     /* parse the listener address if any */
-    if ((curproxy->cap & PR_CAP_FE) && opts && *opts[0]) {
+    if ((curproxy->cap & PR_CAP_FE) && opts && opts[0] && *opts[0]) {
         if (!str2listener(opts[0], curproxy)) {
             err_code = ERR_FATAL;
             /* FIXME: free proxy correctly */
@@ -6061,6 +6061,176 @@ struct proxy* create_proxy(char *name, int cap, char *opts[])
     }
 
     return curproxy;
+}
+
+struct server *addserver(const char *pxid, const char *srvid, const char *addr, const char *cookie)
+{
+    struct proxy        *px;
+    struct server       *newsrv;
+    struct sockaddr_in  *sk;
+    const char          *err;
+    char                *rport, *raddr;
+    short               realport = 0;
+    int                 do_check = 0;
+
+    if ((px = findproxy(pxid, PR_CAP_BE)) == NULL) {
+        Alert("backend '%s' not found.\n", pxid);
+        return NULL;
+    }
+    err = invalid_char(srvid);
+    if (err) {
+        Alert("character '%c' is not permitted in server name '%s'\n",
+                *err, srvid);
+        return NULL;
+    }
+    newsrv = (struct server *)calloc(1, sizeof(struct server));
+    if (!newsrv) {
+        Alert("calloc server: out of memory.\n");
+        return NULL;
+    }
+
+    LIST_INIT(&newsrv->pendconns);
+    do_check = 0;
+    newsrv->state = SRV_MAINTAIN; /* early server setup */
+    newsrv->last_change = now.tv_sec;
+    newsrv->id = strdup(srvid);
+
+    raddr = strdup(addr);
+    rport = strchr(raddr, ':');
+    if (rport) {
+        *rport++ = 0;
+        realport = atol(rport);
+        if (!isdigit((unsigned char)*rport))
+            newsrv->state |= SRV_MAPPORTS;
+    } else
+        newsrv->state |= SRV_MAPPORTS;
+
+    sk = str2sa(raddr);
+    free(raddr);
+    if (!sk) {
+        Alert("Unknown host in '%s'\n", addr);
+        /* FIXME: free newsrv */
+        return NULL;
+    }
+    newsrv->addr = *sk;
+    newsrv->addr.sin_port = htons(realport);
+
+    newsrv->check_port  = px->defsrv.check_port;
+    newsrv->inter       = px->defsrv.inter;
+    newsrv->fastinter   = px->defsrv.fastinter;
+    newsrv->downinter   = px->defsrv.downinter;
+    newsrv->rise        = px->defsrv.rise;
+    newsrv->fall        = px->defsrv.fall;
+    newsrv->maxqueue    = px->defsrv.maxqueue;
+    newsrv->minconn     = px->defsrv.minconn;
+    newsrv->maxconn     = px->defsrv.maxconn;
+    newsrv->slowstart   = px->defsrv.slowstart;
+    newsrv->onerror     = px->defsrv.onerror;
+    newsrv->consecutive_errors_limit
+        = px->defsrv.consecutive_errors_limit;
+    newsrv->uweight = newsrv->iweight
+        = px->defsrv.iweight;
+    Alert("weight = %d\n", newsrv->uweight);
+
+    newsrv->curfd = -1;             /* no health-check in progress */
+    newsrv->health = newsrv->rise;  /* up and fall down at first failure */
+
+    newsrv->cookie = strdup(cookie);
+    newsrv->cklen = strlen(cookie);
+
+    /* check */
+    do_check = 1;
+
+    if (do_check) {
+        if (newsrv->trackit) {
+            Alert("unable to enable checks and while tracking.\n");
+            return NULL;
+        }
+
+        if (!newsrv->check_port && newsrv->check_addr.sin_port)
+            newsrv->check_port = newsrv->check_addr.sin_port;
+        if (!newsrv->check_port && !(newsrv->state & SRV_MAPPORTS))
+            newsrv->check_port = realport; /* by default */
+        if (!newsrv->check_port) {
+            /* not yet valid, because no port was set on
+             * the server either. We'll check if we have
+             * a known port on the first listener.
+             */
+            struct listener *l;
+            l = px->listen;
+            if (l) {
+                int port;
+                port = (l->addr.ss_family == AF_INET6) ?
+                    ntohs(((struct sockaddr_in6 *)(&l->addr))->sin6_port)
+                    : ntohs(((struct sockaddr_in *)(&l->addr))->sin_port);
+            }
+        }
+        if (!newsrv->check_port) {
+            Alert("server '%s' has neither service port nor check port.\n");
+            return NULL;
+        }
+
+        /* Allocate buffer for partial check results... */
+        newsrv->check_data = calloc(global.tune.chksize, sizeof(char));
+        if (newsrv->check_data == NULL) {
+            Alert("out of memory while allocating check buffer.\n");
+            return NULL;
+        }
+
+        newsrv->check_status = HCHK_STATUS_INI;
+        newsrv->state |= SRV_CHECKED;
+    }
+
+    if (newsrv->state & SRV_BACKUP)
+        px->srv_bck++;
+    else
+        px->srv_act++;
+    newsrv->prev_state = newsrv->state;
+
+    /* --- check validity --- */
+    if (!newsrv->puid) {
+        newsrv->conf.id.key = newsrv->puid
+            = get_next_id(&px->conf.used_server_id, 1);
+        eb32_insert(&px->conf.used_server_id, &newsrv->conf.id);
+    }
+
+    if (newsrv->minconn > newsrv->maxconn) {
+        newsrv->maxconn = newsrv->minconn;
+    } else if (newsrv->maxconn && !newsrv->minconn) {
+        newsrv->minconn = newsrv->maxconn;
+    } else if (newsrv->minconn != newsrv->maxconn && !px->fullconn) {
+        Alert("fullconn is mandatory when minconn is set on a server.\n");
+    }
+
+    if (newsrv->trackit) {
+        /* TODO newsrv->trackit is 0 by default */
+    }
+
+    /* sth missed by loadbalance init */
+    newsrv->prev_eweight = newsrv->eweight = newsrv->uweight * BE_WEIGHT_SCALE;
+    newsrv->prev_state = newsrv->state;
+
+    /* --- put into task_queue --- */
+    struct task *t;
+    if ((t = task_new()) == NULL) {
+        Alert("out of memory while task_new().\n");
+        return NULL;
+    }
+
+    t->process = process_chk;
+    t->context = newsrv;
+    t->expire = tick_add(now_ms, MS_TO_TICKS(srv_getinter(newsrv)));
+    newsrv->check = t;
+    newsrv->check_start = now;
+    newsrv->next = px->srv;
+    px->srv = newsrv;
+    newsrv->proxy = px;
+
+    task_queue(t);
+
+    set_server_up(newsrv);
+
+    return newsrv;
 }
 
 /*

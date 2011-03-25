@@ -2954,13 +2954,7 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
         char *backend;
         backend = (char *)hashtbl_get(kv_tbl, "backend");
         if (backend) {
-            Warning("about to add proxy %s\n", backend);
-            if (addbackend(backend)) {
-                Warning("error\n");
-            }
-            else {
-                Warning("ok\n");
-            }
+            create_proxy(backend, PR_CAP_BE|PR_CAP_RS, NULL);
         }
     }
     else if (!strcmp(action, "addsw")) {
@@ -2980,7 +2974,6 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
         opts[0] = addr;
         if (frontend && addr)
             create_proxy(frontend, PR_CAP_FE|PR_CAP_RS, opts);
-            //addfrontend(frontend, addr);
     }
     else if (!strcmp(action, "delfe")) {
         char *frontend;
