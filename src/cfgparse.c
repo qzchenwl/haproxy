@@ -5801,13 +5801,13 @@ struct proxy* create_proxy(const char *name, int cap, char *opts[])
     int err_code = 0;
     if (!(cap & (PR_CAP_LISTEN|PR_CAP_FE|PR_CAP_BE|PR_CAP_RS))) {
         Alert("invalid proxy cap.\n");
-        return NULL;
+        goto out;
     }
     err = invalid_char(name);
     if (err) {
         Alert("character '%c' is not permitted in %s name '%s'.\n", \
                 *err, proxy_cap_str(cap), name);
-        return NULL;
+        goto out;
     }
 
     for (curproxy = proxy; curproxy != NULL; curproxy = curproxy->next) {
@@ -5830,13 +5830,14 @@ struct proxy* create_proxy(const char *name, int cap, char *opts[])
             Warning("%s '%s' has same name as another %s.\n", \
                     proxy_cap_str(cap), name , proxy_type_str(curproxy));
             err_code |= ERR_WARN;
+            goto out;
         }
     }
 
     curproxy = (struct proxy*)calloc(1, sizeof(struct proxy));
     if ( curproxy == NULL) {
         Alert("calloc for proxy '%s': out of memory.\n", name);
-        return NULL;
+        goto out;
     }
 
     init_new_proxy(curproxy);
@@ -5849,7 +5850,7 @@ struct proxy* create_proxy(const char *name, int cap, char *opts[])
         if (!str2listener(opts[0], curproxy)) {
             err_code = ERR_FATAL;
             /* FIXME: free proxy correctly */
-            return NULL;
+            goto delpx_out;
         }
         /* NOTE: global.maxsock++? */
     }
@@ -5923,13 +5924,6 @@ struct proxy* create_proxy(const char *name, int cap, char *opts[])
     proxy = curproxy;
 
     /* --- check validity --- */
-
-    if (!curproxy->uuid) {
-        /* proxy ID not set, get one. */
-        curproxy->conf.id.key = curproxy->uuid = \
-                                get_next_id(&used_proxy_id, 1);
-        eb32_insert(&used_proxy_id, &curproxy->conf.id);
-    }
 
     /* for PR_MODE_HTTP */
     curproxy->acl_requires |= ACL_USE_L7_ANY;
@@ -6019,6 +6013,14 @@ struct proxy* create_proxy(const char *name, int cap, char *opts[])
         if (curproxy->options2 & PR_O2_RDPC_PRST)
             curproxy->be_req_ana |= AN_REQ_PRST_RDP_COOKIE;
     }
+
+    if (!curproxy->uuid) {
+        /* proxy ID not set, get one. */
+        curproxy->conf.id.key = curproxy->uuid = \
+                                get_next_id(&used_proxy_id, 1);
+        eb32_insert(&used_proxy_id, &curproxy->conf.id);
+    }
+
     struct listener *listen = curproxy->listen;
     while(listen) {
         if (!listen->luid) {
@@ -6061,6 +6063,13 @@ struct proxy* create_proxy(const char *name, int cap, char *opts[])
     }
 
     return curproxy;
+
+delpx_out:
+    destroy_proxy(curproxy);
+
+out:
+    return NULL;
+
 }
 
 struct server *addserver(const char *pxid, const char *srvid, const char *addr, const char *cookie)
@@ -6075,18 +6084,18 @@ struct server *addserver(const char *pxid, const char *srvid, const char *addr, 
 
     if ((px = findproxy(pxid, PR_CAP_BE)) == NULL) {
         Alert("backend '%s' not found.\n", pxid);
-        return NULL;
+        goto out;
     }
     err = invalid_char(srvid);
     if (err) {
         Alert("character '%c' is not permitted in server name '%s'\n",
                 *err, srvid);
-        return NULL;
+        goto out;
     }
     newsrv = (struct server *)calloc(1, sizeof(struct server));
     if (!newsrv) {
         Alert("calloc server: out of memory.\n");
-        return NULL;
+        goto out;
     }
 
     LIST_INIT(&newsrv->pendconns);
@@ -6109,8 +6118,7 @@ struct server *addserver(const char *pxid, const char *srvid, const char *addr, 
     free(raddr);
     if (!sk) {
         Alert("Unknown host in '%s'\n", addr);
-        /* FIXME: free newsrv */
-        return NULL;
+        goto delsrv_out;
     }
     newsrv->addr = *sk;
     newsrv->addr.sin_port = htons(realport);
@@ -6144,7 +6152,7 @@ struct server *addserver(const char *pxid, const char *srvid, const char *addr, 
     if (do_check) {
         if (newsrv->trackit) {
             Alert("unable to enable checks and while tracking.\n");
-            return NULL;
+            goto delsrv_out;
         }
 
         if (!newsrv->check_port && newsrv->check_addr.sin_port)
@@ -6166,15 +6174,15 @@ struct server *addserver(const char *pxid, const char *srvid, const char *addr, 
             }
         }
         if (!newsrv->check_port) {
-            Alert("server '%s' has neither service port nor check port.\n");
-            return NULL;
+            Alert("server '%s' has neither service port nor check port.\n", newsrv->id);
+            goto delsrv_out;
         }
 
         /* Allocate buffer for partial check results... */
         newsrv->check_data = calloc(global.tune.chksize, sizeof(char));
         if (newsrv->check_data == NULL) {
             Alert("out of memory while allocating check buffer.\n");
-            return NULL;
+            goto delsrv_out;
         }
 
         newsrv->check_status = HCHK_STATUS_INI;
@@ -6214,7 +6222,7 @@ struct server *addserver(const char *pxid, const char *srvid, const char *addr, 
     struct task *t;
     if ((t = task_new()) == NULL) {
         Alert("out of memory while task_new().\n");
-        return NULL;
+        goto delsrv_out;
     }
 
     t->process = process_chk;
@@ -6231,7 +6239,242 @@ struct server *addserver(const char *pxid, const char *srvid, const char *addr, 
     set_server_up(newsrv);
 
     return newsrv;
+
+delsrv_out:
+    destroy_server(newsrv);
+out:
+    return NULL;
 }
+
+int delserver(const char *pxid, const char *svid)
+{
+    struct proxy *px;
+    struct server *oldsrv, *presrv;
+    struct task *t;
+    if ((px = findproxy(pxid, PR_CAP_BE)) == NULL) {
+        Alert("del server %s failed. backend %s not found.\n", svid, pxid);
+        goto out;
+    }
+    if ((oldsrv = findserver(px, svid)) == NULL) {
+        Alert("del server %s failed. server not found.\n", svid);
+        goto out;
+    }
+    t = oldsrv->check;
+
+    oldsrv->state |= SRV_MAINTAIN;
+    set_server_down(oldsrv);
+
+    task_delete(t);
+    task_free(t);
+
+    if (px->srv == oldsrv)
+        px->srv = oldsrv->next;
+    else {
+        presrv = px->srv;
+        while (presrv->next != oldsrv)
+            presrv = presrv->next;
+        presrv->next = oldsrv->next;
+    }
+
+    destroy_server(oldsrv);
+    return 0;
+
+out:
+    return 1;
+}
+
+int delproxy(const char *id, int cap)
+{
+    struct proxy *curproxy, *px;
+    struct switching_rule *rule;
+
+    px = findproxy(id, cap);
+    if (!px) {
+        Alert("%s '%s' not found\n", proxy_cap_str(cap), id);
+        goto out;
+    }
+
+    if (cap & PR_CAP_BE) {
+        for (curproxy = proxy; curproxy; curproxy = curproxy->next) {
+            if (curproxy == px)
+                continue;
+            if (curproxy->defbe.be == px) {
+                Alert("%s '%s' has '%s' as default backend.\n", \
+                        proxy_cap_str(curproxy->cap), curproxy->id, id);
+                goto out;
+            }
+
+            /* find the target proxy for 'setbe' rules */
+            if (curproxy->mode == PR_MODE_HTTP && curproxy->req_exp != NULL) {
+                /* map jump target for ACT_SETBE in req_rep chain */ 
+                struct hdr_exp *exp;
+                for (exp = curproxy->req_exp; exp != NULL; exp = exp->next) {
+                    if (exp->action != ACT_SETBE)
+                        continue;
+                    if (exp->replace == px) {
+                        Alert("%s '%s' has '%s' in setbe.\n", \
+                                proxy_cap_str(curproxy->cap), curproxy->id, id);
+                        goto out;
+                    }
+                }
+            }
+
+            /* find the target proxy for 'use_backend' rules */
+            list_for_each_entry(rule, &curproxy->switching_rules, list) {
+                if (rule->be.backend == px) {
+                    Alert("%s '%s' has '%s' in use_backend field.\n", \
+                            proxy_cap_str(curproxy->cap), curproxy->id, id);
+                    goto out;
+                }
+            }
+
+            /* find the target proxy for 'use_backend' hash entries */
+            ENTRY *node;
+            int i;
+            for (i = 0; i < curproxy->switching_hashtbl->size; ++i) {
+                for (node = curproxy->switching_hashtbl->nodes[i]; node; \
+                        node = node->next) {
+                    if (node->data == px) {
+                        Alert("%s '%s' has '%s' in use_backend field.\n", \
+                                proxy_cap_str(curproxy->cap), curproxy->id, id);
+                        goto out;
+                    }
+                }
+            }
+        }
+    }
+
+    stop_proxy(px);
+
+    if (proxy == px)
+        proxy = px->next;
+    else {
+        curproxy = proxy;
+        while (curproxy->next != px)
+            curproxy = curproxy->next;
+        curproxy->next = px->next;
+    }
+
+
+    destroy_proxy(px);
+    return 0;
+
+out:
+    return 1;
+}
+
+#if 0
+int delfrontend(const char *id)
+{
+    struct proxy *curproxy, *px;
+    struct switching_rule *rule;
+    px = findproxy(id, PR_CAP_FE);
+    if (!px) {
+        Warning("frontend '%s' not found\n", id);
+        return 1;
+    }
+
+    stop_proxy(px);
+
+    if (proxy == px)
+        proxy = px->next;
+    else {
+        curproxy = proxy;
+        while (curproxy->next != px)
+            curproxy = curproxy->next;
+        curproxy->next = px->next;
+    }
+
+    /* FIXME use destroy_proxy() */
+    free(px);
+}
+
+int delbackend(struct proxy *px)
+{
+    struct proxy *curproxy;
+    struct switching_rule *rule;
+
+    for (curproxy = proxy; curproxy; curproxy = curproxy->next) {
+        if (curproxy->defbe.be == px) {
+            Warning("proxy '%s' has default proxy '%s'\n", curproxy->id, px->id);
+            return 1;
+        }
+
+        list_for_each_entry(rule, &curproxy->switching_rules, list) {
+            if (rule->be.backend == px) {
+                Warning("proxy '%s' has use_backend '%s'\n", curproxy->id, px->id);
+                return 1;
+            }
+        }
+    }
+    while (px->srv) {
+        delserver(px->id, px->srv->id);
+    }
+
+    // NOTE stop_proxy(curproxy);
+
+    if (proxy == px)
+        proxy = px->next;
+    else {
+        curproxy = proxy;
+        while (curproxy->next != px)
+            curproxy = curproxy->next;
+        curproxy->next = px->next;
+    }
+    /* FIXME: free proxy memebers, id, lists...*/
+    free(px);
+    return 0;
+}
+#endif
+
+int add_switch_entry(const char *frontend, const char *backend, const char *domain)
+{
+    struct proxy *fe, *be;
+    if ((fe = findproxy(frontend, PR_CAP_FE)) == NULL) {
+        Alert("cannot find frontend '%s'.\n", frontend);
+        return 1;
+    }
+    if ((be = findproxy(backend, PR_CAP_BE)) == NULL) {
+        Alert("cannot find backend '%s'.\n", backend);
+        return 1;
+    }
+    hashtbl_insert(fe->switching_hashtbl, domain, be);
+    return 0;
+}
+int del_switch_entry(const char *frontend, const char *domain)
+{
+    struct proxy *fe;
+    if ((fe = findproxy(frontend, PR_CAP_FE)) == NULL) {
+        Alert("cannot find frontend '%s'.\n", frontend);
+        return 1;
+    }
+    return hashtbl_remove(fe->switching_hashtbl, domain) \
+        == 0 ? 0 : 1;
+}
+
+void destroy_server(struct server *s)
+{
+    /* FIXME:
+     * DO NOT free server before you remove s->conf.id from
+     * s->proxy->conf.used_server_id.
+     * Need eb32_remove function!!!
+     * ref: eb32_insert(&px->conf.used_server_id, &newsrv->conf.id)
+     */
+    //free(s);
+}
+
+void destroy_proxy(struct proxy *p)
+{
+    /* FIXME: 
+     * curproxy->conf.id has been inserted into used_proxy_id.
+     * DO NOT free proxy before you remove it from the tree.
+     * The same to the listener id.
+     * Need eb32_remove function!!!
+     * ref: eb32_insert(&used_proxy_id, &curproxy->conf.id)
+     */
+    //free(p);
+}
+
 
 /*
  * Local variables:

@@ -2944,10 +2944,9 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
     else if (!strcmp(action, "delbe")) {
         char *backend;
         backend = (char *)hashtbl_get(kv_tbl, "backend");
-        px = backend ? findproxy(backend, PR_CAP_BE) : NULL;
         if (px) {
-            Warning("about to delproxy %s\n", px->id);
-            delbackend(px);
+            Warning("about to delproxy %s\n", backend);
+            delproxy(backend, PR_CAP_BE);
         }
     }
     else if (!strcmp(action, "addbe")) {
@@ -2966,6 +2965,14 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
             add_switch_entry(frontend, backend, domain);
         }
     }
+    else if (!strcmp(action, "delsw")) {
+        char *frontend, *domain;
+        frontend    = (char *)hashtbl_get(kv_tbl, "frontend");
+        domain      = (char *)hashtbl_get(kv_tbl, "domain");
+        if (frontend && domain) {
+            del_switch_entry(frontend, domain);
+        }
+    }
     else if (!strcmp(action, "addfe")) {
         char *frontend, *addr;
         char *opts[] = {NULL, NULL};
@@ -2979,7 +2986,7 @@ int http_process_req_stat_post(struct session *s, struct buffer *req)
         char *frontend;
         frontend    = (char*)hashtbl_get(kv_tbl, "frontend");
         if (frontend)
-            delfrontend(frontend);
+            delproxy(frontend, PR_CAP_FE);
     }
     else {
     }

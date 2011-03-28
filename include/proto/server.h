@@ -34,6 +34,7 @@
 
 int srv_downtime(struct server *s);
 int srv_getinter(struct server *s);
+void destroy_server(struct server *s);
 
 /* increase the number of cumulated connections on the designated server */
 static void inline srv_inc_sess_ctr(struct server *s)

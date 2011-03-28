@@ -35,6 +35,7 @@ void pause_proxy(struct proxy *p);
 void stop_proxy(struct proxy *p);
 void pause_proxies(void);
 void listen_proxies(void);
+void destroy_proxy(struct proxy *p);
 int  session_set_backend(struct session *s, struct proxy *be);
 
 const char *proxy_cap_str(int cap);
@@ -42,9 +43,6 @@ const char *proxy_mode_str(int mode);
 struct proxy *findproxy_mode(const char *name, int mode, int cap);
 struct proxy *findproxy(const char *name, int cap);
 struct server *findserver(const struct proxy *px, const char *name);
-struct server *addserver(const char *pxid, const char *svid, const char *addr, const char *cookie);
-int delserver(const char *pxid, const char *svid);
-int delbackend(struct proxy *px);
 int proxy_cfg_ensure_no_http(struct proxy *curproxy);
 int get_backend_server(const char *bk_name, const char *sv_name,
 		       struct proxy **bk, struct server **sv);
